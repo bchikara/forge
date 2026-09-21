@@ -284,19 +284,38 @@ export class InviteSender {
  * checked against the account's pending list: one that is no longer
  * pending and is now a connection was accepted.
  */
-export async function reconcileInvites({ listSent }) {
+export async function reconcileInvites({ listSent, minAgeMinutes = 30 } = {}) {
   const pending = await listSent();
   const pendingIds = new Set(
     pending.map((p) => p.invitation_id ?? p.id).filter(Boolean)
   );
 
   const d = db();
+
+  // Only invitations old enough for LinkedIn to have indexed them.
+  // An invitation sent minutes ago may not appear in the pending list
+  // yet, and absence is what this reads as acceptance — so a fresh one
+  // would be counted as accepted and inflate the rate the throttle
+  // depends on.
   const sent = d
     .prepare(
-      `SELECT id, provider_id FROM invites
-        WHERE is_dry_run = 0 AND status = 'sent' AND provider_id IS NOT NULL`
+      `SELECT id, provider_id, sent_at FROM invites
+        WHERE is_dry_run = 0 AND status = 'sent' AND provider_id IS NOT NULL
+          AND sent_at <= datetime('now', ?)`
     )
-    .all();
+    .all(`-${minAgeMinutes} minutes`);
+
+  // An empty pending list is ambiguous: either every invitation was
+  // answered, or the call failed and returned nothing. Marking them all
+  // accepted on a failed call would silently push the rate to 100% and
+  // disable the throttle, so treat it as no information.
+  if (pending.length === 0 && sent.length > 0) {
+    return {
+      checked: sent.length,
+      accepted: 0,
+      skipped: 'pending list came back empty — treated as no data rather than universal acceptance',
+    };
+  }
 
   let accepted = 0;
   for (const row of sent) {
@@ -312,5 +331,5 @@ export async function reconcileInvites({ listSent }) {
   }
 
   if (accepted) bumpInviteQuota({ accepted });
-  return { checked: sent.length, accepted };
+  return { checked: sent.length, accepted, stillPending: sent.length - accepted };
 }

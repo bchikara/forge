@@ -45,7 +45,13 @@ import { resolveUntilTarget } from '../adapters/resolver.js';
 import { extractReqId } from '../roles/reqid.js';
 import { buildEmail, inviteNote } from '../templates/index.js';
 import { Sender } from '../mailer/sender.js';
-import { InviteSender, inviteQuotaUsed, acceptanceRate } from '../invites/sender.js';
+import {
+  InviteSender,
+  inviteQuotaUsed,
+  acceptanceRate,
+  reconcileInvites,
+} from '../invites/sender.js';
+import { listSentInvitations } from '../adapters/unipile.js';
 import {
   importApplications,
   rolesNeedingJd,
@@ -173,6 +179,25 @@ const TOOLS = [
         limit: { type: 'number' },
       },
       required: ['company'],
+    },
+  },
+  {
+    name: 'forge_reconcile_invites',
+    description:
+      'Check which sent LinkedIn invitations have been accepted, and update the ' +
+      'acceptance rate. Call this once per daily run before sending invitations: ' +
+      'LinkedIn reduces invite capacity for accounts whose requests are widely ' +
+      'ignored, and without this the rate stays null so the pipeline can never ' +
+      'throttle itself before LinkedIn does. Only invitations older than ' +
+      'minAgeMinutes are judged, since a fresh one may not be indexed yet.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minAgeMinutes: {
+          type: 'number',
+          description: 'Ignore invitations newer than this (default 30)',
+        },
+      },
     },
   },
   {
@@ -620,6 +645,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           summary,
           quota: inviteQuotaUsed(),
           details: results.map((r) => ({ status: r.status, to: r.to, reason: r.reason, error: r.error })),
+        });
+      }
+
+      case 'forge_reconcile_invites': {
+        const res = await reconcileInvites({
+          listSent: () => listSentInvitations({ limit: 100 }),
+          minAgeMinutes: args.minAgeMinutes ?? 30,
+        });
+        const rate = acceptanceRate();
+        return text({
+          ...res,
+          acceptanceRate: rate.rate,
+          acceptanceSample: rate.sample,
+          throttleFloor: config.unipile.invites.minAcceptanceRate,
+          throttled:
+            rate.rate !== null &&
+            rate.sample >= config.unipile.invites.minInvitesBeforeCheck &&
+            rate.rate < config.unipile.invites.minAcceptanceRate,
         });
       }
 

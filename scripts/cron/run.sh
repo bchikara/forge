@@ -140,7 +140,7 @@ READ_TOOLS="mcp__forge__forge_status,mcp__forge__forge_queue,mcp__forge__forge_l
 
 APPLY_TOOLS="$READ_TOOLS,mcp__tsenta__get-job-recommendations,mcp__tsenta__apply-to-job,mcp__tsenta__list-applications,mcp__tsenta__fetch-job-description,mcp__forge__forge_import_applications,mcp__forge__forge_roles_needing_jd,mcp__forge__forge_save_jd,mcp__forge__forge_next_companies,mcp__forge__forge_find_invite_target,mcp__forge__forge_find_contacts"
 
-OUTREACH_TOOLS="$READ_TOOLS,mcp__forge__forge_preview,mcp__forge__forge_send_invites,mcp__forge__forge_send_emails,mcp__forge__forge_send_report,mcp__forge__forge_suppress"
+OUTREACH_TOOLS="$READ_TOOLS,mcp__forge__forge_preview,mcp__forge__forge_send_invites,mcp__forge__forge_send_emails,mcp__forge__forge_send_report,mcp__forge__forge_suppress,mcp__forge__forge_reconcile_invites"
 
 case "$PASS" in
   apply)    ALLOWED="$APPLY_TOOLS" ;;
