@@ -23,3 +23,4 @@ venv/
 # Logs
 *.log
 npm-debug.log*
+logs/

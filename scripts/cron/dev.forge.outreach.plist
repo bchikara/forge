@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.forge.outreach</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/vipul/Desktop/Forge/scripts/cron/run.sh</string>
+    <string>outreach</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>10</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <!-- MCP servers are scoped per project directory: tsenta is registered
+       against ~/Desktop/Project. Running elsewhere loses it. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/vipul/Desktop/Project</string>
+
+  <!-- launchd gives an agent almost no environment; node and claude both
+       need to be findable. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/vipul/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/vipul</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/vipul/Desktop/Forge/logs/launchd-outreach.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/vipul/Desktop/Forge/logs/launchd-outreach.err</string>
+
+  <!-- A pass can take a couple of hours with pacing; do not let launchd
+       consider it hung. -->
+  <key>ExitTimeOut</key>
+  <integer>0</integer>
+
+  <!-- Run once at the scheduled time, not repeatedly. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+</dict>
+</plist>
