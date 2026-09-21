@@ -13,8 +13,10 @@ set -uo pipefail
 
 PASS="${1:-}"
 FORGE_DIR="/Users/vipul/Desktop/Forge"
-PROMPT_FILE="$FORGE_DIR/scripts/cron/prompts/${PASS}.md"
-LOG_DIR="$FORGE_DIR/logs"
+CRON_HOME="$HOME/Library/Application Support/Forge/cron"
+PROMPT_FILE="$CRON_HOME/prompts/${PASS}.md"
+# Logs live outside Desktop for the same TCC reason as the database.
+LOG_DIR="$HOME/Library/Application Support/Forge/logs"
 STAMP="$(date +%Y-%m-%d)"
 LOG="$LOG_DIR/${STAMP}-${PASS}.log"
 
@@ -44,6 +46,63 @@ mkdir -p "$LOG_DIR"
 } >> "$LOG"
 
 cd "$RUN_DIR" || exit 70
+
+# ---------------------------------------------------------------
+# Pass ordering
+# ---------------------------------------------------------------
+# launchd fires each pass on its own schedule with no notion of the others,
+# so a pass has to check for itself that the work it depends on exists.
+# Without this, an apply pass that failed — a blocked agent, a closed laptop,
+# an expired credential — is followed by an outreach pass that finds nothing,
+# sends nothing, and mails a report full of zeros. That report reads like a
+# quiet day rather than a broken one, which is the worst possible outcome:
+# the failure is hidden by a successful-looking run.
+#
+# A missed window is handled the same way. If the Mac was asleep at 07:00,
+# launchd runs the pass on wake, and outreach at 10:30 will either find the
+# work done or defer.
+STATE_DIR="$LOG_DIR/state"
+mkdir -p "$STATE_DIR"
+APPLY_MARKER="$STATE_DIR/apply-$STAMP.done"
+
+case "$PASS" in
+  apply|topup)
+    : # Nothing to wait on.
+    ;;
+  outreach)
+    if [[ ! -f "$APPLY_MARKER" ]]; then
+      {
+        echo "SKIPPED: the apply pass has not completed today."
+        echo "Outreach depends on it — without new companies there is nothing"
+        echo "to reach out about, and a report of zeros would look like a quiet"
+        echo "day rather than a failed one."
+        echo ""
+        echo "Run the apply pass first:"
+        echo "  $CRON_HOME/install.sh test apply"
+      } >> "$LOG"
+
+      # Tell the operator, since a silent skip is the thing this guards
+      # against. Best effort: if this cannot send, the log still has it.
+      # dotenv looks for .env relative to the working directory, which is
+      # ~/Desktop/Project here, so the repo's .env must be named explicitly
+      # or the report has no recipient configured.
+      ( cd "$FORGE_DIR" && node -e "
+        import('$FORGE_DIR/src/report/index.js')
+          .then((r) => r.sendFailureAlert({
+            stage: 'outreach (skipped)',
+            error: new Error('The apply pass did not complete today, so there is nothing to reach out about. Outreach was skipped rather than sending a report of zeros.'),
+            context: { pass: '$PASS', date: '$STAMP' },
+          }))
+          .then((res) => console.log('alert:', JSON.stringify(res)))
+          .catch((e) => console.error('alert failed:', e.message));
+      " ) >> "$LOG" 2>&1
+
+      echo "$(date '+%Y-%m-%d %H:%M:%S') outreach skipped — apply did not complete" \
+        >> "$LOG_DIR/failures.log"
+      exit 0
+    fi
+    ;;
+esac
 
 # Tools each pass is allowed to call.
 #
@@ -83,6 +142,11 @@ STATUS=$?
   echo "finished: $(date '+%Y-%m-%d %H:%M:%S %Z')  exit=$STATUS"
   echo ""
 } >> "$LOG"
+
+# Record a successful apply so the outreach pass knows it has work.
+if [[ $STATUS -eq 0 && ( "$PASS" == "apply" || "$PASS" == "topup" ) ]]; then
+  touch "$APPLY_MARKER"
+fi
 
 if [[ $STATUS -ne 0 ]]; then
   # Leave a marker so a later pass — and the operator — can see this failed

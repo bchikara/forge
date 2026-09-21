@@ -8,7 +8,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/vipul/Desktop/Forge/scripts/cron/run.sh</string>
+    <string>/Users/vipul/Library/Application Support/Forge/cron/run.sh</string>
     <string>apply</string>
   </array>
 
@@ -34,9 +34,9 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/vipul/Desktop/Forge/logs/launchd-apply.out</string>
+  <string>/Users/vipul/Library/Application Support/Forge/logs/launchd-apply.out</string>
   <key>StandardErrorPath</key>
-  <string>/Users/vipul/Desktop/Forge/logs/launchd-apply.err</string>
+  <string>/Users/vipul/Library/Application Support/Forge/logs/launchd-apply.err</string>
 
   <!-- A pass can take a couple of hours with pacing; do not let launchd
        consider it hung. -->

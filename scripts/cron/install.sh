@@ -24,8 +24,8 @@
 
 set -uo pipefail
 
-CRON_DIR="/Users/vipul/Desktop/Forge/scripts/cron"
-LOG_DIR="/Users/vipul/Desktop/Forge/logs"
+CRON_DIR="$HOME/Library/Application Support/Forge/cron"
+LOG_DIR="$HOME/Library/Application Support/Forge/logs"
 AGENT_DIR="$HOME/Library/LaunchAgents"
 PASSES=(apply outreach topup)
 ORANGE=$'\033[38;2;255;102;0m'
