@@ -45,8 +45,31 @@ export function upsertCompany({ name, domain = null, linkedinUrl = null }) {
   const slug = slugify(name);
   const d = db();
 
-  const existing = d.prepare('SELECT * FROM companies WHERE slug = ?').get(slug);
+  // Match on slug first, then on domain. Slug alone is not enough: a
+  // company whose name was corrected keeps its original slug, so the next
+  // lookup misses it and inserts a second row — which is how LexisNexis
+  // and HP each ended up with one row holding the role and another
+  // holding the contacts, leaving outreach with no job to reference.
+  // The domain is the stabler identity, so it is the fallback.
+  const existing =
+    d.prepare('SELECT * FROM companies WHERE slug = ?').get(slug) ??
+    (domain
+      ? d.prepare('SELECT * FROM companies WHERE domain = ? AND domain != \'\'').get(domain)
+      : null);
+
   if (existing) {
+    // Keep the slug in step with the name, so a later lookup by either
+    // the old or the corrected name finds this row rather than making
+    // a new one.
+    if (existing.slug !== slug) {
+      const clash = d
+        .prepare('SELECT id FROM companies WHERE slug = ? AND id != ?')
+        .get(slug, existing.id);
+      if (!clash) {
+        d.prepare('UPDATE companies SET slug = ? WHERE id = ?').run(slug, existing.id);
+      }
+    }
+
     // Fill in fields we learned since first seeing this company, but
     // never overwrite a known value with null.
     d.prepare(
