@@ -31,20 +31,30 @@ export const config = {
     roleFamilies: (process.env.FORGE_SEARCH_ROLE_FAMILIES ?? 'SOFTWARE_ENGINEERING')
       .split(',')
       .map((s) => s.trim()),
-    // 24h matches a daily cron: each run sees only what is new, with no
-    // overlap. It also caps the realistic daily volume — the 24h US
-    // software-engineering pool measured 33 postings with hasMore
-    // false, of which maybe half are worth an application. A target of
-    // 50/day cannot be met from fresh postings alone; widening to 7d
-    // is the way to go deeper, using excludeJobIds so the same roles
-    // do not resurface every morning.
+    // 7d, not 24h. The 24h US software-engineering pool measured 33
+    // postings with hasMore false — the whole pool, not a page limit —
+    // so a 50/day target cannot be met from fresh listings alone. The
+    // 7d window returns 100+ across pages with match scores holding in
+    // the mid-70s, which is where the volume lives.
+    //
+    // The cost of the wider window is re-seeing the same postings every
+    // morning. excludeJobIds handles that: tsenta filters out anything
+    // already applied to, and forge_search_filter adds the roles this
+    // pipeline has already tracked.
     datePosted: process.env.FORGE_SEARCH_DATE_POSTED ?? '24h',
     limit: int(process.env.FORGE_SEARCH_LIMIT, 50),
     // Minimum match score worth a credit. Below roughly 60 the feed
     // turns into adjacent roles — Salesforce architects, hourly
     // contract listings — rather than backend engineering.
     minMatchScore: int(process.env.FORGE_MIN_MATCH_SCORE, 60),
-    maxCompaniesPerRun: int(process.env.FORGE_MAX_COMPANIES_PER_RUN, 35),
+    maxCompaniesPerRun: int(process.env.FORGE_MAX_COMPANIES_PER_RUN, 50),
+
+    // Applications wanted per day, across however many runs it takes.
+    // The morning run often cannot fill this — the feed may be short,
+    // an ATS may refuse, or a screening question may hold one back —
+    // so an afternoon run tops up the remainder rather than applying a
+    // second full batch on top of the first.
+    dailyApplicationTarget: int(process.env.FORGE_DAILY_APPLICATION_TARGET, 50),
   },
 
   // ---------------------------------------------------------------

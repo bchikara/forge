@@ -103,13 +103,25 @@ returned 17 of 20 postings in countries this operator cannot work in. Filtered
 to `country:US` it returned 19 of 20 usable, six of them explicitly sponsoring
 visas.
 
-The window is `24h` by default, which matches a daily run — each morning sees
-only what is new. That also caps realistic volume: the 24h US
-software-engineering pool measured 33 postings with no further pages, and match
-scores fall from 78 to 50 across that list. A target far above ~30 applications
-a day cannot be met from fresh postings, so widen `FORGE_SEARCH_DATE_POSTED` to
-`7d` and rely on `excludeJobIds` rather than dropping the score floor and
-applying to adjacent roles.
+The window is `7d`. A 24h window sounds right for a daily run, but the 24h US
+software-engineering pool measured 33 postings with `hasMore: false` — the whole
+pool, not a page limit — so a 50/day target cannot be met from fresh listings.
+The 7d window returns 100+ across pages with match scores holding in the
+mid-70s. `excludeJobIds` keeps the wider window from re-surfacing the same
+postings each morning.
+
+`FORGE_MIN_MATCH_SCORE` is the floor worth spending a credit on. Below roughly
+60 the feed turns into adjacent roles — Salesforce architects, hourly contract
+listings — so when the feed cannot fill the daily target, leave it short rather
+than lowering the floor.
+
+### Topping up
+
+`forge_search_filter` returns `remainingToday`, not a fixed batch size: the
+daily target minus what has already been applied to. A morning run frequently
+falls short — the feed runs dry, an ATS refuses, a screening question holds one
+back — so a second run after lunch fills the remainder instead of applying
+another full batch on top.
 
 ## Volume
 

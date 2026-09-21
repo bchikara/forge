@@ -634,22 +634,43 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           .all()
           .map((r) => r.tsenta_app_id);
 
+        // How many applications are still owed today. The morning run
+        // frequently cannot fill the target — the feed runs short, an
+        // ATS refuses, a screening question holds one back — so an
+        // afternoon run tops up the shortfall instead of applying a
+        // second full batch.
+        const appliedToday = db()
+          .prepare(
+            `SELECT COUNT(*) n FROM roles
+              WHERE applied_at >= date('now', 'localtime')`
+          )
+          .get().n;
+
+        const remaining = Math.max(0, s.dailyApplicationTarget - appliedToday);
+
         return text({
           recommendationArgs: {
             locations: s.locations,
             jobTypes: s.jobTypes,
             roleFamilies: s.roleFamilies,
             datePosted: args.datePosted ?? s.datePosted,
-            limit: s.limit,
+            // Over-fetch relative to the remaining budget: postings
+            // below the score floor get discarded, so asking for
+            // exactly `remaining` yields fewer than that.
+            limit: Math.min(50, Math.max(20, remaining * 2)),
             ...(seen.length ? { excludeJobIds: seen } : {}),
           },
           minMatchScore: s.minMatchScore,
-          maxCompaniesPerRun: s.maxCompaniesPerRun,
+          dailyTarget: s.dailyApplicationTarget,
+          appliedToday,
+          remainingToday: remaining,
           guidance:
-            `Apply only to postings at or above matchScore ${s.minMatchScore}. ` +
-            `The ${args.datePosted ?? s.datePosted} US software-engineering pool is ` +
-            `roughly 30 postings, so a target much above that cannot be met from ` +
-            `fresh listings — widen datePosted rather than lowering the score floor.`,
+            remaining === 0
+              ? `Today's target of ${s.dailyApplicationTarget} is already met (${appliedToday} applied). Nothing to apply to — move on to outreach.`
+              : `Apply to up to ${remaining} more postings today (${appliedToday} of ${s.dailyApplicationTarget} done), ` +
+                `at or above matchScore ${s.minMatchScore}. Page through results if the first page runs short — ` +
+                `the 7d pool has 100+ postings. If the feed still cannot fill the target, leave it short rather ` +
+                `than dropping the score floor: below ${s.minMatchScore} the results are adjacent roles, not backend engineering.`,
         });
       }
 
