@@ -53,6 +53,7 @@ Register it with your agent client pointing at `src/mcp/server.js` over stdio.
 
 | Tool | Does |
 |---|---|
+| `forge_search_filter` | The filter to pass to tsenta, plus already-seen job ids |
 | `forge_status` | Quotas used, bounce rate, acceptance rate, row counts |
 | `forge_track_role` | Record a posting; extracts the employer's req id from the URL |
 | `forge_find_contacts` | LinkedIn search → email resolution, until the target is met |
@@ -93,6 +94,22 @@ generally qualifies, so leaving it empty means the mail is not compliant. A
 mailbox service costs a few dollars a month and avoids publishing a home
 address. Nothing in the code blocks sending without it — the footer just
 omits the line.
+
+## Job search filter
+
+`forge_search_filter` returns the arguments for tsenta's
+`get-job-recommendations`. It matters more than it sounds: unfiltered, that feed
+returned 17 of 20 postings in countries this operator cannot work in. Filtered
+to `country:US` it returned 19 of 20 usable, six of them explicitly sponsoring
+visas.
+
+The window is `24h` by default, which matches a daily run — each morning sees
+only what is new. That also caps realistic volume: the 24h US
+software-engineering pool measured 33 postings with no further pages, and match
+scores fall from 78 to 50 across that list. A target far above ~30 applications
+a day cannot be met from fresh postings, so widen `FORGE_SEARCH_DATE_POSTED` to
+`7d` and rely on `excludeJobIds` rather than dropping the score floor and
+applying to adjacent roles.
 
 ## Volume
 

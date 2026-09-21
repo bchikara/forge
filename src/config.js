@@ -16,11 +16,34 @@ export const config = {
   // ---------------------------------------------------------------
   // Job discovery
   // ---------------------------------------------------------------
+  // These are the arguments passed straight to tsenta's
+  // get-job-recommendations. Without them the feed is mostly onsite
+  // roles in countries the operator cannot work in — measured at 17 of
+  // 20 results before filtering, 1 of 20 after.
   search: {
-    // US-only per the brief. Remote counts as US-remote, not global.
-    countries: ['US'],
-    // Senior/Staff IC and engineering management.
-    seniority: ['senior', 'staff', 'principal', 'em', 'manager'],
+    // Structured tokens, not bare names: "country:US" works, "United
+    // States" is auto-resolved, but a bare city or state silently
+    // matches almost nothing.
+    locations: (process.env.FORGE_SEARCH_LOCATIONS ?? 'country:US').split(',').map((s) => s.trim()),
+    jobTypes: (process.env.FORGE_SEARCH_JOB_TYPES ?? 'EXPERIENCED,MID_LEVEL')
+      .split(',')
+      .map((s) => s.trim()),
+    roleFamilies: (process.env.FORGE_SEARCH_ROLE_FAMILIES ?? 'SOFTWARE_ENGINEERING')
+      .split(',')
+      .map((s) => s.trim()),
+    // 24h matches a daily cron: each run sees only what is new, with no
+    // overlap. It also caps the realistic daily volume — the 24h US
+    // software-engineering pool measured 33 postings with hasMore
+    // false, of which maybe half are worth an application. A target of
+    // 50/day cannot be met from fresh postings alone; widening to 7d
+    // is the way to go deeper, using excludeJobIds so the same roles
+    // do not resurface every morning.
+    datePosted: process.env.FORGE_SEARCH_DATE_POSTED ?? '24h',
+    limit: int(process.env.FORGE_SEARCH_LIMIT, 50),
+    // Minimum match score worth a credit. Below roughly 60 the feed
+    // turns into adjacent roles — Salesforce architects, hourly
+    // contract listings — rather than backend engineering.
+    minMatchScore: int(process.env.FORGE_MIN_MATCH_SCORE, 60),
     maxCompaniesPerRun: int(process.env.FORGE_MAX_COMPANIES_PER_RUN, 35),
   },
 

@@ -189,6 +189,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'forge_search_filter',
+    description:
+      'The arguments to pass to tsenta get-job-recommendations, plus the ids of ' +
+      'jobs already tracked so they are not re-surfaced. Call this first in a daily ' +
+      'run: without a location filter the feed is mostly onsite roles in countries ' +
+      'the operator cannot work in. Also returns minMatchScore — the score below ' +
+      'which a posting is not worth a credit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        datePosted: {
+          type: 'string',
+          description: 'Override the configured window (6h, 24h, 7d, 30d, all)',
+        },
+      },
+    },
+  },
+  {
     name: 'forge_import_applications',
     description:
       'Import submitted applications from tsenta. Pass the array that tsenta\'s ' +
@@ -603,6 +621,36 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           .prepare(`UPDATE contacts SET opted_out_at = datetime('now') WHERE email = ?`)
           .run(String(args.value).toLowerCase());
         return text({ suppressed: args.value, reason: args.reason ?? null });
+      }
+
+      case 'forge_search_filter': {
+        const s = config.search;
+        // Jobs already tracked here. tsenta filters out anything
+        // already applied to on its own, so this mainly covers roles
+        // seen and passed over — relevant once the window widens past
+        // a single day.
+        const seen = db()
+          .prepare(`SELECT tsenta_app_id FROM roles WHERE tsenta_app_id IS NOT NULL`)
+          .all()
+          .map((r) => r.tsenta_app_id);
+
+        return text({
+          recommendationArgs: {
+            locations: s.locations,
+            jobTypes: s.jobTypes,
+            roleFamilies: s.roleFamilies,
+            datePosted: args.datePosted ?? s.datePosted,
+            limit: s.limit,
+            ...(seen.length ? { excludeJobIds: seen } : {}),
+          },
+          minMatchScore: s.minMatchScore,
+          maxCompaniesPerRun: s.maxCompaniesPerRun,
+          guidance:
+            `Apply only to postings at or above matchScore ${s.minMatchScore}. ` +
+            `The ${args.datePosted ?? s.datePosted} US software-engineering pool is ` +
+            `roughly 30 postings, so a target much above that cannot be met from ` +
+            `fresh listings — widen datePosted rather than lowering the score floor.`,
+        });
       }
 
       case 'forge_import_applications': {
