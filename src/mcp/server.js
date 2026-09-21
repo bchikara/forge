@@ -54,6 +54,8 @@ import {
 } from '../tsenta/import.js';
 import { findInviteTargets } from '../adapters/ladder.js';
 import { stats as queueStats, deadLetter, revive, reclaimExpired } from '../queue/index.js';
+import { cooldownStatus, clearCooldown } from '../adapters/cooldown.js';
+import { status as lockStatus } from '../lock/index.js';
 import { sendDailyReport, sendFailureAlert, gather, attentionItems } from '../report/index.js';
 
 migrate();
@@ -373,6 +375,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
         return text({
           dryRunDefault: config.safety.dryRun,
+          // A pass already running, or a provider still cooling down,
+          // both mean "do not start sending" — surfacing them here
+          // saves a caller discovering it one request at a time.
+          runLock: lockStatus(),
+          providers: {
+            jobright: cooldownStatus('jobright'),
+            unipile: cooldownStatus('unipile'),
+          },
           email: {
             sentToday: quotaUsedToday(),
             dailyCap: config.mail.pacing.dailyCap,

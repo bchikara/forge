@@ -297,3 +297,20 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_day_kind
   ON reports(day, kind) WHERE kind = 'daily';
+
+-- ---------------------------------------------------------------
+-- External provider cooldowns
+-- ---------------------------------------------------------------
+-- jobright caps email lookups and reports it as errorCode 43003. The
+-- allowance resets about an hour later, so the useful thing to record
+-- is when it becomes usable again — otherwise every run rediscovers
+-- the limit by spending a request on it, and a run that starts inside
+-- the window wastes one lookup per company learning what the previous
+-- run already knew.
+CREATE TABLE IF NOT EXISTS provider_cooldown (
+  provider    TEXT PRIMARY KEY,        -- jobright | unipile
+  reason      TEXT,
+  until       TEXT NOT NULL,
+  hit_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  hits        INTEGER NOT NULL DEFAULT 1
+);

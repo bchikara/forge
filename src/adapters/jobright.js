@@ -20,6 +20,7 @@
  */
 
 import { config } from '../config.js';
+import { startCooldown, cooldownRemaining, cooldownStatus } from './cooldown.js';
 
 export class SessionExpiredError extends Error {
   constructor(status) {
@@ -234,9 +235,9 @@ async function request(url, { referer, signal } = {}) {
       /* not JSON — fall through to the session reading */
     }
     if (looksLikeQuota(parsed ?? raw)) {
-      // Long backoff: this is a daily or hourly allowance, not a
-      // per-second throttle, so retrying in two minutes just burns the
-      // attempt again.
+      // Write down when the allowance returns, so later callers skip
+      // the request instead of rediscovering the limit by spending one.
+      startCooldown('jobright', config.jobright.quotaBackoffMs, 'errorCode 43003 — lookup limit');
       throw new RateLimitedError(config.jobright.quotaBackoffMs);
     }
     throw new SessionExpiredError(res.status);
@@ -244,7 +245,10 @@ async function request(url, { referer, signal } = {}) {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    if (looksLikeQuota(body)) throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    if (looksLikeQuota(body)) {
+      startCooldown('jobright', config.jobright.quotaBackoffMs, `HTTP ${res.status} — lookup limit`);
+      throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    }
     throw new Error(`jobright HTTP ${res.status}: ${body.slice(0, 200)}`);
   }
 
@@ -263,7 +267,14 @@ async function request(url, { referer, signal } = {}) {
   // this the caller reads it as "no email on file" and moves on, so a
   // whole run silently resolves nothing while looking healthy.
   if (payload?.success === false) {
-    if (looksLikeQuota(payload)) throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    if (looksLikeQuota(payload)) {
+      startCooldown(
+        'jobright',
+        config.jobright.quotaBackoffMs,
+        `errorCode ${payload.errorCode ?? '?'} — ${payload.errorMsg ?? 'lookup limit'}`
+      );
+      throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    }
     throw new Error(
       `jobright error ${payload.errorCode ?? '?'}: ${payload.errorMsg ?? payload.result ?? 'unknown'}`
     );
@@ -282,6 +293,16 @@ async function request(url, { referer, signal } = {}) {
 export async function resolveEmail(linkedinUrl, { referer, timeoutMs, companyDomain } = {}) {
   if (!config.jobright.sessionCookie) {
     throw new Error('JOBRIGHT_SESSION_COOKIE is not set — add it to .env');
+  }
+
+  // Fail fast while the allowance is spent. Making the request anyway
+  // would return the same limit error and, on some paths, count against
+  // the next window.
+  const cooling = cooldownRemaining('jobright');
+  if (cooling > 0) {
+    const err = new RateLimitedError(cooling * 1000);
+    err.cooldown = cooldownStatus('jobright');
+    throw err;
   }
 
   const normalized = normalizeLinkedInUrl(linkedinUrl);

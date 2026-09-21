@@ -229,9 +229,13 @@ export const config = {
     timeoutMs: int(process.env.JOBRIGHT_TIMEOUT_MS, 15_000),
     // jobright caps email lookups and reports it as errorCode 43003,
     // "reach email connection limit" / "Reached risk control limit".
-    // That is an allowance over hours, not a per-second throttle, so a
-    // short retry just burns another attempt against a closed door.
-    quotaBackoffMs: int(process.env.JOBRIGHT_QUOTA_BACKOFF_MS, 3 * 60 * 60 * 1000),
+    // One hour is the operator's measured reset window, not a guess: an
+    // earlier three-hour default came from first principles and simply
+    // left the pipeline idle for two hours longer than necessary.
+    //
+    // A little over the hour, so a retry lands after the reset rather
+    // than one request short of it.
+    quotaBackoffMs: int(process.env.JOBRIGHT_QUOTA_BACKOFF_MS, 65 * 60 * 1000),
   },
 
   // ---------------------------------------------------------------
