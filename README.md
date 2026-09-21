@@ -85,9 +85,14 @@ Guards enforced on every send, not once per run:
 - **Send window** — business hours, weekdays, with randomized delays between
   messages.
 
-Every outbound email carries an unsubscribe line. Set
-`FORGE_POSTAL_ADDRESS` — CAN-SPAM requires a physical address on commercial
-mail.
+Every outbound email carries an unsubscribe line.
+
+`FORGE_POSTAL_ADDRESS` adds a physical address to the footer. CAN-SPAM
+requires one on commercial email, and unsolicited outreach to strangers
+generally qualifies, so leaving it empty means the mail is not compliant. A
+mailbox service costs a few dollars a month and avoids publishing a home
+address. Nothing in the code blocks sending without it — the footer just
+omits the line.
 
 ## Volume
 

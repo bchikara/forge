@@ -194,7 +194,12 @@ export const config = {
     unsubscribeText:
       process.env.FORGE_UNSUBSCRIBE_TEXT ??
       'If you would rather not hear from me, reply with "no thanks" and I will not follow up.',
-    // A physical address is a CAN-SPAM requirement for commercial mail.
+    // CAN-SPAM requires a valid physical postal address on commercial
+    // email, and unsolicited outreach to strangers generally counts as
+    // commercial. Left empty here by the operator's choice, which
+    // trades compliance for not publishing a home address; a mailbox
+    // service is the usual way to have both. Nothing blocks sending
+    // when this is empty — the footer simply omits it.
     senderPostalAddress: process.env.FORGE_POSTAL_ADDRESS ?? '',
   },
 

@@ -190,6 +190,14 @@ export function sendableContacts(companyId, step = 1) {
                    AND s.sequence_step = ?
                    AND s.is_dry_run = 0
               )
+          -- One channel per person. Someone who already received a
+          -- LinkedIn invitation should not also get an email about the
+          -- same roles: two messages in a day from a stranger reads as
+          -- pressure, and the invitation is the better channel anyway.
+          AND NOT EXISTS (
+                SELECT 1 FROM invites i
+                 WHERE i.contact_id = c.id AND i.is_dry_run = 0
+              )
         ORDER BY c.email_confidence DESC`
     )
     .all(companyId, config.contacts.minConfidence, step);
