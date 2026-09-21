@@ -1,9 +1,17 @@
-import 'dotenv/config';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+
+// Load .env from the repo, not from the working directory. dotenv's default
+// resolves relative to cwd, and the scheduled passes run from a different
+// directory so they loaded no configuration at all — which silently sent
+// the database to a fallback path that macOS TCC blocks launchd from
+// reading, and left the daily report with no recipient.
+dotenv.config({ path: path.join(ROOT, '.env') });
 
 const int = (v, d) => (v === undefined || v === '' ? d : Number.parseInt(v, 10));
 const num = (v, d) => (v === undefined || v === '' ? d : Number.parseFloat(v));
@@ -11,7 +19,12 @@ const bool = (v, d) => (v === undefined || v === '' ? d : v === 'true' || v === 
 
 export const config = {
   root: ROOT,
-  dbPath: process.env.FORGE_DB_PATH ?? path.join(ROOT, 'data', 'forge.db'),
+  // Default outside the repo: Desktop is unreadable by launchd-spawned
+  // processes under macOS TCC, so a database there works interactively and
+  // fails silently on a schedule.
+  dbPath:
+    process.env.FORGE_DB_PATH ??
+    path.join(os.homedir(), 'Library', 'Application Support', 'Forge', 'data', 'forge.db'),
 
   // ---------------------------------------------------------------
   // Job discovery

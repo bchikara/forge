@@ -104,6 +104,19 @@ case "$PASS" in
     ;;
 esac
 
+# The passes run from ~/Desktop/Project, not from the repo, and dotenv
+# resolves .env relative to the working directory — so without this the
+# report has no recipient and every pass ends with "No recipients defined",
+# including one that has real sends to report or a failure to alert about.
+# Exporting it here covers both the CLI's MCP subprocess and any node the
+# script runs directly.
+if [[ -f "$FORGE_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$FORGE_DIR/.env"
+  set +a
+fi
+
 # Tools each pass is allowed to call.
 #
 # --permission-mode acceptEdits is not enough on its own: it covers file
