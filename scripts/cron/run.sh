@@ -110,11 +110,23 @@ esac
 # including one that has real sends to report or a failure to alert about.
 # Exporting it here covers both the CLI's MCP subprocess and any node the
 # script runs directly.
+# Export only what this script itself needs. `source` is wrong for a
+# .env: bash expands $ in unquoted values, so the jobright cookie's
+# session fields get mangled, and a path containing a space is split
+# into arguments. Node already loads .env by absolute path for
+# everything that runs through it — this is just for the shell.
 if [[ -f "$FORGE_DIR/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$FORGE_DIR/.env"
-  set +a
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    # Only the handful of variables the shell reads; everything else is
+    # node's business and safer left untouched.
+    case "$key" in
+      FORGE_REPORT_TO|FORGE_DB_PATH|FORGE_DRY_RUN) export "$key=$val" ;;
+    esac
+  done < "$FORGE_DIR/.env"
 fi
 
 # Tools each pass is allowed to call.
@@ -138,6 +150,49 @@ case "$PASS" in
   topup)    ALLOWED="$APPLY_TOOLS,$OUTREACH_TOOLS" ;;
   *)        echo "unknown pass: $PASS" >&2; exit 64 ;;
 esac
+
+# ---------------------------------------------------------------
+# One pass at a time
+# ---------------------------------------------------------------
+# launchd fires each pass on its own schedule with no idea whether
+# another is still running, and discovery for a full day's companies
+# takes over an hour — so a 12:30 run is still going when 13:30 fires.
+# Two passes sharing one database means both read the same remaining
+# daily quota and both spend it, or one sends to a company whose
+# contacts the other is still resolving.
+#
+# A second arrival exits rather than waiting: the work is idempotent and
+# the next scheduled pass picks it up, so queueing would only stack
+# passes behind a slow one.
+LOCK_CLI="$FORGE_DIR/scripts/lock.js"
+
+# Acquire on behalf of this shell, not the node subprocess: the
+# subprocess exits immediately, so a lock keyed to its pid would be
+# released the moment it did.
+if ! node "$LOCK_CLI" acquire "$PASS" "$$" >> "$LOG" 2>&1; then
+  {
+    echo "SKIPPED: another pass holds the run lock."
+    node "$LOCK_CLI" status 2>&1 || true
+    echo ""
+    echo "Nothing was done. The work is idempotent, so the next scheduled"
+    echo "pass picks it up — queueing here would only stack passes behind"
+    echo "a slow one."
+  } >> "$LOG"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $PASS skipped — run lock held" \
+    >> "$LOG_DIR/failures.log"
+  exit 0
+fi
+
+# Keep beating while the pass runs, so a long run is not mistaken for a
+# crashed one. The heartbeat is what staleness is judged on.
+( while true; do sleep 60; node "$LOCK_CLI" heartbeat "$$" >/dev/null 2>&1 || true; done ) &
+HEARTBEAT_PID=$!
+
+cleanup() {
+  kill "$HEARTBEAT_PID" 2>/dev/null || true
+  node "$LOCK_CLI" release "$$" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
 
 # A single long turn: the model drives both MCP servers to completion.
 claude \

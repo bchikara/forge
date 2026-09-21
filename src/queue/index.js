@@ -121,6 +121,96 @@ export function enqueue({
 }
 
 /**
+ * The stage each kind depends on, per company or role.
+ *
+ * Ordering was modelled by `next` but never enforced: a pass could send
+ * email for a company whose contacts were still being resolved, because
+ * nothing checked. With this, a task is not claimable until the stage
+ * before it has actually completed for the same unit of work — so an
+ * email cannot precede its own contact resolution by construction
+ * rather than by the caller being careful.
+ */
+const REQUIRES = {
+  enrich_jd: 'import',
+  find_contacts: 'enrich_jd',
+  invite: 'find_contacts',
+  // Email depends on contacts, not on an invitation having gone out.
+  // Chaining it behind `invite` would strand every company that has no
+  // invitable contact — and email is the fallback for precisely that
+  // case. The one-channel-per-person rule is enforced in the send
+  // query instead, where it belongs.
+  email: 'find_contacts',
+  followup: 'email',
+};
+
+/**
+ * Whether a task may run yet.
+ *
+ * Checks the whole ancestor chain, not just the immediate predecessor:
+ * with only a one-step check, a stage that was never enqueued reads as
+ * satisfied and the gate opens early — which is how an email became
+ * claimable while its company's contact resolution was still pending.
+ *
+ * Presence of a completed task is not the test either, because a stage
+ * can legitimately be run outside the queue. What matters is whether
+ * the data that stage produces exists. So the gate asks that question
+ * directly, and falls back to task state only for stages with no
+ * observable output.
+ *
+ * Scoped to one company or role, so a company still in discovery does
+ * not hold up one that finished an hour ago.
+ */
+function predecessorSatisfied(d, task) {
+  const chain = [];
+  for (let k = REQUIRES[task.kind]; k; k = REQUIRES[k]) {
+    if (chain.includes(k)) break; // guard against a cycle in REQUIRES
+    chain.push(k);
+  }
+  if (chain.length === 0) return true;
+  if (!task.company_id && !task.role_id) return true;
+
+  const companyId = task.company_id;
+  const roleId = task.role_id;
+
+  for (const stage of chain) {
+    // Any still-running instance of an ancestor blocks, whichever
+    // stage it is.
+    const scopeCol = roleId ? 'role_id' : 'company_id';
+    const scopeVal = roleId ?? companyId;
+    const inFlight = d
+      .prepare(
+        `SELECT COUNT(*) n FROM tasks
+          WHERE kind = ? AND ${scopeCol} = ?
+            AND state IN ('pending', 'claimed')`
+      )
+      .get(stage, scopeVal).n;
+    if (inFlight > 0) return false;
+
+    // Then the output test: did this stage actually produce anything?
+    if (stage === 'find_contacts' && companyId) {
+      const n = d
+        .prepare('SELECT COUNT(*) n FROM contacts WHERE company_id = ?')
+        .get(companyId).n;
+      if (n === 0) return false;
+    }
+
+    if (stage === 'enrich_jd' && roleId) {
+      const r = d
+        .prepare('SELECT length(COALESCE(jd_text, \'\')) AS len FROM roles WHERE id = ?')
+        .get(roleId);
+      if (!r || r.len < 200) return false;
+    }
+
+    // `invite` is deliberately not an output gate. A company can have
+    // no invitable contact — nobody with a provider id, or the weekly
+    // cap reached — and email is the fallback for exactly that case, so
+    // requiring an invitation first would strand it.
+  }
+
+  return true;
+}
+
+/**
  * Claim up to `limit` due tasks.
  *
  * The claim and the state change happen in one transaction so two
@@ -160,6 +250,11 @@ export function claim({ kinds = null, limit = 1, leaseSeconds = 900, workerId = 
 
     const claimed = [];
     for (const r of rows) {
+      // Skip rather than defer: the row stays pending and a later claim
+      // picks it up once its predecessor lands, which keeps the wait in
+      // one place instead of spread across run_after arithmetic.
+      if (!predecessorSatisfied(d, r)) continue;
+
       const res = upd.run(worker, `+${leaseSeconds} seconds`, r.id);
       if (res.changes === 1) {
         claimed.push({ ...r, payload: JSON.parse(r.payload), attempts: r.attempts + 1 });
