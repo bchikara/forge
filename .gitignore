@@ -1,0 +1,25 @@
+node_modules/
+
+# Credentials — never commit. See .env.example for the shape.
+.env
+.env.local
+*.pem
+*.key
+
+# Local database and WAL files
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*

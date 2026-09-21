@@ -1,0 +1,22 @@
+{
+  "name": "forge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Outreach automation: job discovery, contact resolution, and paced cold email. Exposed as an MCP server alongside tsenta.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:init": "node scripts/init-db.js",
+    "db:stats": "node scripts/stats.js",
+    "mcp": "node src/mcp/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "nodemailer": "^6.9.16",
+    "zod": "^3.24.1"
+  }
+}
