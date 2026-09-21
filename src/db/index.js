@@ -97,6 +97,7 @@ export function upsertContact({
   fullName = null,
   title = null,
   tier = 'other',
+  rung = null,
   linkedinUrl = null,
   providerId = null,
   email = null,
@@ -122,19 +123,20 @@ export function upsertContact({
               email_confidence = COALESCE(?, email_confidence),
               linkedin_url     = COALESCE(?, linkedin_url),
               provider_id      = COALESCE(?, provider_id),
+              rung             = COALESCE(?, rung),
               updated_at       = datetime('now')
         WHERE id = ?`
-    ).run(fullName, title, email, emailSource, emailConfidence, linkedinUrl, providerId, existing.id);
+    ).run(fullName, title, email, emailSource, emailConfidence, linkedinUrl, providerId, rung, existing.id);
     return d.prepare('SELECT * FROM contacts WHERE id = ?').get(existing.id);
   }
 
   const info = d
     .prepare(
       `INSERT INTO contacts
-         (company_id, full_name, title, tier, linkedin_url, provider_id, email, email_source, email_confidence)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (company_id, full_name, title, tier, rung, linkedin_url, provider_id, email, email_source, email_confidence)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(companyId, fullName, title, tier, linkedinUrl, providerId, email, emailSource, emailConfidence);
+    .run(companyId, fullName, title, tier, rung, linkedinUrl, providerId, email, emailSource, emailConfidence);
 
   return d.prepare('SELECT * FROM contacts WHERE id = ?').get(info.lastInsertRowid);
 }

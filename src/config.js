@@ -198,6 +198,17 @@ export const config = {
     senderPostalAddress: process.env.FORGE_POSTAL_ADDRESS ?? '',
   },
 
+  // ---------------------------------------------------------------
+  // Reporting
+  // ---------------------------------------------------------------
+  // The daily report goes to the operator after a run completes; a
+  // failure alert is sent separately, because a crashed run never
+  // reaches the reporting step and silence looks like a quiet day.
+  report: {
+    to: process.env.FORGE_REPORT_TO ?? '',
+    enabled: bool(process.env.FORGE_REPORT_ENABLED, true),
+  },
+
   brand: {
     orange: '#FF6600',
     ink: '#0A0A0A',

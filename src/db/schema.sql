@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS contacts (
   -- hiring_manager | recruiter | leader | other. Drives template choice
   -- and the per-tier caps in config.
   tier              TEXT    NOT NULL DEFAULT 'other',
+  -- Which rung of the fallback ladder supplied this contact. An
+  -- engineering manager is the target; 'senior_peer' means the company
+  -- had nobody closer to the hiring decision. Recorded so outreach
+  -- quality per company is visible after the fact.
+  rung              TEXT,
   linkedin_url      TEXT    UNIQUE,
   -- LinkedIn's internal member id, required to send an invitation.
   -- The public slug in linkedin_url is not accepted by the invite API.
@@ -230,3 +235,65 @@ CREATE TABLE IF NOT EXISTS invite_quota_daily (
   sent_count        INTEGER NOT NULL DEFAULT 0,
   updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------
+-- Task queue
+-- ---------------------------------------------------------------
+-- The pipeline is data-driven rather than a script with sequential
+-- loops: each stage enqueues the next, so one company failing does not
+-- block unrelated companies, and a crashed run resumes from here
+-- instead of from an agent's memory.
+--
+-- Rate limits make this necessary rather than merely tidy. Forty
+-- invitations a day against fifty companies means outreach inherently
+-- spills across days; a queue models that, a loop does not.
+CREATE TABLE IF NOT EXISTS tasks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- apply | import | enrich_jd | find_contacts | invite | email | followup
+  kind          TEXT    NOT NULL,
+  payload       TEXT    NOT NULL DEFAULT '{}',   -- JSON
+  -- pending | claimed | done | dead
+  state         TEXT    NOT NULL DEFAULT 'pending',
+  priority      INTEGER NOT NULL DEFAULT 100,    -- lower runs first
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3,
+  -- Not claimable before this time. Backoff and rate-limit deferral
+  -- both work by pushing this out rather than by sleeping.
+  run_after     TEXT    NOT NULL DEFAULT (datetime('now')),
+  -- Claims are leased, not flagged: a worker that dies leaves its
+  -- items claimable again once the lease expires, rather than stuck.
+  claimed_at    TEXT,
+  claimed_by    TEXT,
+  lease_until   TEXT,
+  last_error    TEXT,
+  -- Unique per logical unit of work, so the same job is never enqueued
+  -- twice even if a stage runs again.
+  dedupe_key    TEXT,
+  company_id    INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+  role_id       INTEGER REFERENCES roles(id) ON DELETE CASCADE,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  completed_at  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedupe
+  ON tasks(dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_claimable
+  ON tasks(state, run_after, priority) WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS idx_tasks_kind  ON tasks(kind, state);
+CREATE INDEX IF NOT EXISTS idx_tasks_lease ON tasks(state, lease_until) WHERE state = 'claimed';
+
+-- Daily report log, so a report is not sent twice for the same day and
+-- the previous run's numbers are available for comparison.
+CREATE TABLE IF NOT EXISTS reports (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  day           TEXT    NOT NULL,
+  kind          TEXT    NOT NULL DEFAULT 'daily',  -- daily | failure
+  stats         TEXT,                              -- JSON snapshot
+  sent_at       TEXT,
+  error         TEXT,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_day_kind
+  ON reports(day, kind) WHERE kind = 'daily';
