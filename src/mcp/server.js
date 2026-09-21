@@ -46,6 +46,15 @@ import { extractReqId } from '../roles/reqid.js';
 import { buildEmail, inviteNote } from '../templates/index.js';
 import { Sender } from '../mailer/sender.js';
 import { InviteSender, inviteQuotaUsed, acceptanceRate } from '../invites/sender.js';
+import {
+  importApplications,
+  rolesNeedingJd,
+  saveJd,
+  companiesNeedingContacts,
+} from '../tsenta/import.js';
+import { findInviteTargets } from '../adapters/ladder.js';
+import { stats as queueStats, deadLetter, revive, reclaimExpired } from '../queue/index.js';
+import { sendDailyReport, sendFailureAlert, gather, attentionItems } from '../report/index.js';
 
 migrate();
 
@@ -177,6 +186,123 @@ const TOOLS = [
         reason: { type: 'string' },
       },
       required: ['value'],
+    },
+  },
+  {
+    name: 'forge_import_applications',
+    description:
+      'Import submitted applications from tsenta. Pass the array that tsenta\'s ' +
+      'list-applications returns. Creates companies and roles, parses the employer ' +
+      'requisition id from each posting URL, recovers company names that were scraped ' +
+      'wrong, and queues each role for job-description fetching. Skipped applications ' +
+      'are excluded — outreach must not claim an application that never reached the ' +
+      'employer. Idempotent: safe to re-run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        applications: {
+          type: 'array',
+          description: 'Rows from tsenta list-applications (or the whole response object)',
+          items: { type: 'object' },
+        },
+      },
+      required: ['applications'],
+    },
+  },
+  {
+    name: 'forge_roles_needing_jd',
+    description:
+      'List roles whose job description text is missing. Call tsenta ' +
+      'fetch-job-description for each, then pass the text back via forge_save_jd. ' +
+      'The fit paragraph in outreach depends on this text, so a role without it gets ' +
+      'a generic email.',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'number' } },
+    },
+  },
+  {
+    name: 'forge_save_jd',
+    description:
+      'Store job description text for a role, fetched from tsenta. Rejects text under ' +
+      '200 characters, which is almost always an error page rather than a posting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        roleId: { type: 'number' },
+        jdText: { type: 'string' },
+      },
+      required: ['roleId', 'jdText'],
+    },
+  },
+  {
+    name: 'forge_next_companies',
+    description:
+      'Companies with a submitted application and no contacts found yet, newest first. ' +
+      'This is the work list for contact discovery.',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'number' } },
+    },
+  },
+  {
+    name: 'forge_find_invite_target',
+    description:
+      'Find the best person to invite at a company, walking a fallback ladder: ' +
+      'engineering manager, then engineering lead or director, then technical ' +
+      'recruiter, then VP/CTO, then senior engineer. Stops at the first rung with ' +
+      'someone verifiably at that company. Use when invitations are the priority and ' +
+      'one strong contact per company matters more than breadth.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        company: { type: 'string' },
+        want: { type: 'number', description: 'How many targets (default 1)' },
+      },
+      required: ['company'],
+    },
+  },
+  {
+    name: 'forge_queue',
+    description:
+      'Queue state: counts by stage and state, what is due now, and the dead letter. ' +
+      'Also reclaims expired leases from workers that died mid-task. Read-only apart ' +
+      'from that reclaim.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        deadLimit: { type: 'number' },
+        reclaim: { type: 'boolean', description: 'true also returns expired leases to pending' },
+      },
+    },
+  },
+  {
+    name: 'forge_revive_task',
+    description:
+      'Return a dead-lettered task to the queue after fixing whatever blocked it. ' +
+      'Resets its attempt count.',
+    inputSchema: {
+      type: 'object',
+      properties: { taskId: { type: 'number' } },
+      required: ['taskId'],
+    },
+  },
+  {
+    name: 'forge_send_report',
+    description:
+      'Email the daily status report: counts, what needs attention, dead letter, ' +
+      'quotas and health. Call after a run completes. Pass kind="failure" with an ' +
+      'error message to send a failure alert instead — a crashed run never reaches ' +
+      'the daily report, and silence looks like a quiet day.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['daily', 'failure'] },
+        to: { type: 'string' },
+        force: { type: 'boolean', description: 'Resend even if today\'s report already went' },
+        stage: { type: 'string', description: 'For kind=failure: which stage died' },
+        error: { type: 'string', description: 'For kind=failure: the error message' },
+      },
     },
   },
   {
@@ -477,6 +603,108 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           .prepare(`UPDATE contacts SET opted_out_at = datetime('now') WHERE email = ?`)
           .run(String(args.value).toLowerCase());
         return text({ suppressed: args.value, reason: args.reason ?? null });
+      }
+
+      case 'forge_import_applications': {
+        const res = importApplications(args.applications);
+        return text({
+          ...res,
+          note:
+            res.suspectNames.length > 0
+              ? `${res.suspectNames.length} company name(s) looked like scraped JD text and were ` +
+                `recovered from the website domain — check them before sending.`
+              : undefined,
+          nextStep:
+            res.queued > 0
+              ? 'Call forge_roles_needing_jd, fetch each JD via tsenta, then forge_save_jd.'
+              : 'Nothing new queued.',
+        });
+      }
+
+      case 'forge_roles_needing_jd': {
+        const rows = rolesNeedingJd({ limit: args.limit ?? 50 });
+        return text({
+          count: rows.length,
+          roles: rows,
+          note:
+            rows.length > 0
+              ? 'For each: tsenta fetch-job-description with the url, then forge_save_jd with roleId + jdText.'
+              : 'All roles have job description text.',
+        });
+      }
+
+      case 'forge_save_jd': {
+        return text(saveJd(args.roleId, args.jdText));
+      }
+
+      case 'forge_next_companies': {
+        const rows = companiesNeedingContacts({ limit: args.limit ?? 50 });
+        return text({ count: rows.length, companies: rows });
+      }
+
+      case 'forge_find_invite_target': {
+        const company = upsertCompany({ name: args.company });
+        const res = await findInviteTargets(args.company, { want: args.want ?? 1 });
+
+        // Store what was found, so the invite stage can use it and the
+        // report can show which rung this company reached.
+        for (const t of res.targets) {
+          upsertContact({
+            companyId: company.id,
+            fullName: t.fullName,
+            title: t.title,
+            tier: t.tier,
+            rung: t.rung,
+            linkedinUrl: t.linkedinUrl,
+            providerId: t.providerId,
+          });
+        }
+
+        return text({
+          company: args.company,
+          reachedRung: res.reachedRung,
+          exhausted: res.exhausted,
+          rungsTried: res.rungsTried,
+          targets: res.targets.map((t) => ({
+            name: t.fullName,
+            title: t.title,
+            rung: t.rung,
+            rungLabel: t.rungLabel,
+            linkedinUrl: t.linkedinUrl,
+          })),
+          note: res.exhausted
+            ? 'No verified contact at any rung — this company needs a manual look.'
+            : undefined,
+        });
+      }
+
+      case 'forge_queue': {
+        const reclaimed = args.reclaim ? reclaimExpired() : { reclaimed: 0 };
+        return text({
+          ...queueStats(),
+          reclaimed: reclaimed.reclaimed,
+          dead: deadLetter({ limit: args.deadLimit ?? 20 }),
+        });
+      }
+
+      case 'forge_revive_task': {
+        return text(revive(args.taskId));
+      }
+
+      case 'forge_send_report': {
+        if (args.kind === 'failure') {
+          const res = await sendFailureAlert({
+            stage: args.stage ?? 'unknown',
+            error: new Error(args.error ?? 'unspecified failure'),
+            to: args.to,
+          });
+          return text(res);
+        }
+        const res = await sendDailyReport({ to: args.to, force: args.force === true });
+        // Include the summary so the caller sees what was reported
+        // without opening the email.
+        const s = gather();
+        return text({ ...res, attention: attentionItems(s), counts: { roles: s.roles, invites: s.invites, emails: s.emails } });
       }
 
       case 'forge_list_companies': {
