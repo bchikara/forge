@@ -193,32 +193,83 @@ export function adjustForCompany(confidence, email, companyDomain) {
   return Math.min(confidence, 0.4);
 }
 
+/**
+ * jobright signals its own quota exhaustion rather than using 429.
+ *
+ * Observed: errorCode 43003 with "reach email connection limit" and
+ * "Reached risk control limit", returned under a 403 and also under a
+ * 200 with success:false. Treating that as an expired session was wrong
+ * twice over — it sent the operator to refresh a cookie that was fine,
+ * and it aborted the whole run as fatal when the correct response is to
+ * back off and resume.
+ */
+const QUOTA_CODES = new Set([43003]);
+const QUOTA_TEXT = /connection limit|risk control|rate limit|too many request|quota/i;
+
+function looksLikeQuota(body) {
+  if (!body) return false;
+  if (typeof body === 'object') {
+    if (QUOTA_CODES.has(body.errorCode)) return true;
+    return QUOTA_TEXT.test(`${body.errorMsg ?? ''} ${body.result ?? ''}`);
+  }
+  return QUOTA_TEXT.test(String(body));
+}
+
 async function request(url, { referer, signal } = {}) {
   const res = await fetch(url, { headers: headers(referer), signal });
-
-  if (res.status === 401 || res.status === 403) {
-    throw new SessionExpiredError(res.status);
-  }
 
   if (res.status === 429) {
     const retryAfter = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
     throw new RateLimitedError(Number.isFinite(retryAfter) ? retryAfter * 1000 : 120_000);
   }
 
+  if (res.status === 401 || res.status === 403) {
+    // A 403 is ambiguous here: it covers both a dead session and an
+    // exhausted lookup quota, and only the body distinguishes them.
+    const raw = await res.text().catch(() => '');
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      /* not JSON — fall through to the session reading */
+    }
+    if (looksLikeQuota(parsed ?? raw)) {
+      // Long backoff: this is a daily or hourly allowance, not a
+      // per-second throttle, so retrying in two minutes just burns the
+      // attempt again.
+      throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    }
+    throw new SessionExpiredError(res.status);
+  }
+
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    if (looksLikeQuota(body)) throw new RateLimitedError(config.jobright.quotaBackoffMs);
     throw new Error(`jobright HTTP ${res.status}: ${body.slice(0, 200)}`);
   }
 
   const text = await res.text();
+  let payload;
   try {
-    return JSON.parse(text);
+    payload = JSON.parse(text);
   } catch {
     // An HTML response almost always means the session bounced us to a
     // login page with a 200.
     if (text.trimStart().startsWith('<')) throw new SessionExpiredError(res.status);
     throw new Error(`jobright returned non-JSON: ${text.slice(0, 200)}`);
   }
+
+  // A 200 can still carry success:false with the quota error. Without
+  // this the caller reads it as "no email on file" and moves on, so a
+  // whole run silently resolves nothing while looking healthy.
+  if (payload?.success === false) {
+    if (looksLikeQuota(payload)) throw new RateLimitedError(config.jobright.quotaBackoffMs);
+    throw new Error(
+      `jobright error ${payload.errorCode ?? '?'}: ${payload.errorMsg ?? payload.result ?? 'unknown'}`
+    );
+  }
+
+  return payload;
 }
 
 /**

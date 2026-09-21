@@ -227,6 +227,11 @@ export const config = {
     // Kept behind an adapter so swapping the source is a small change.
     sessionCookie: process.env.JOBRIGHT_SESSION_COOKIE ?? '',
     timeoutMs: int(process.env.JOBRIGHT_TIMEOUT_MS, 15_000),
+    // jobright caps email lookups and reports it as errorCode 43003,
+    // "reach email connection limit" / "Reached risk control limit".
+    // That is an allowance over hours, not a per-second throttle, so a
+    // short retry just burns another attempt against a closed door.
+    quotaBackoffMs: int(process.env.JOBRIGHT_QUOTA_BACKOFF_MS, 3 * 60 * 60 * 1000),
   },
 
   // ---------------------------------------------------------------

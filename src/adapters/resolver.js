@@ -14,7 +14,12 @@
  * whether a guess is worth sending to.
  */
 
-import { resolveEmail, adjustForCompany, SessionExpiredError } from './jobright.js';
+import {
+  resolveEmail,
+  adjustForCompany,
+  SessionExpiredError,
+  RateLimitedError,
+} from './jobright.js';
 import { config } from '../config.js';
 
 /**
@@ -97,6 +102,10 @@ export async function resolveUntilTarget(
   const found = [];
   const attempts = [];
   const floor = config.contacts.minConfidence;
+  // Set when jobright's lookup allowance runs out mid-company, so the
+  // caller can report it and skip further resolution rather than
+  // retrying against a closed door for every remaining candidate.
+  let quotaExhausted = null;
 
   // Addresses already confirmed for this company teach us the format,
   // which makes the fallback a derivation rather than a guess.
@@ -112,6 +121,17 @@ export async function resolveUntilTarget(
       // A dead session is fatal for the whole run — stop rather than
       // grinding through every remaining candidate against a 403.
       if (err instanceof SessionExpiredError) throw err;
+
+      // An exhausted lookup quota is not. Email resolution stops, but
+      // the candidates themselves are still worth keeping: an
+      // invitation needs only a provider id, and invitations are the
+      // better channel anyway. So stop resolving, keep what was found,
+      // and let the caller carry on with the rest of the pipeline.
+      if (err instanceof RateLimitedError) {
+        quotaExhausted = err;
+        break;
+      }
+
       result = { email: null, confidence: 0, source: 'jobright', error: err.message };
     }
 
@@ -160,5 +180,9 @@ export async function resolveUntilTarget(
     pattern,
     shortfall: Math.max(0, want - found.length),
     exhausted: found.length < want,
+    // Distinguishes "this company has no resolvable addresses" from
+    // "we ran out of lookups", which look identical in the counts.
+    quotaExhausted: Boolean(quotaExhausted),
+    quotaRetryInMs: quotaExhausted?.retryAfterMs ?? null,
   };
 }
