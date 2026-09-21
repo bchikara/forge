@@ -198,6 +198,14 @@ export function sendableContacts(companyId, step = 1) {
                 SELECT 1 FROM invites i
                  WHERE i.contact_id = c.id AND i.is_dry_run = 0
               )
+          -- Only people who could plausibly act on an engineering
+          -- application. Company-wide search returns everyone at the
+          -- employer, and the first run surfaced Business Development,
+          -- Account Executives, HR Business Partners, Product Designers
+          -- and a Leveraged Finance VP. Writing to them about a backend
+          -- role is what gets a sender marked as spam, so an unclassified
+          -- tier is excluded rather than sent generic copy.
+          AND c.tier IN ('hiring_manager', 'recruiter', 'leader', 'peer')
         ORDER BY c.email_confidence DESC`
     )
     .all(companyId, config.contacts.minConfidence, step);
