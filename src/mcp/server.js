@@ -775,7 +775,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case 'forge_find_invite_target': {
         const company = upsertCompany({ name: args.company });
-        const res = await findInviteTargets(args.company, { want: args.want ?? 1 });
+        // Pass the domain: for a short company name the matcher needs
+        // corroboration beyond the name appearing in a headline, and
+        // the domain stem is the strongest signal available.
+        const res = await findInviteTargets(args.company, {
+          want: args.want ?? 1,
+          companyDomain: company.domain,
+        });
 
         // Store what was found, so the invite stage can use it and the
         // report can show which rung this company reached.

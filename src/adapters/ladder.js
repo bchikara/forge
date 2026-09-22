@@ -89,7 +89,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * member id, not the public slug) and a headline that actually matches
  * the rung being searched.
  */
-function usable(candidate, rung, company) {
+function usable(candidate, rung, company, companyDomain = null) {
   if (!candidate.providerId) return false;
   if (!candidate.title) return false;
   if (!rung.titleTest.test(candidate.title)) return false;
@@ -101,7 +101,31 @@ function usable(candidate, rung, company) {
   // as obviously automated, which is worse than reaching nobody.
   const headline = candidate.title.toLowerCase();
   const target = company.toLowerCase();
-  if (!headline.includes(target)) return false;
+
+  // Match on a word boundary, not a substring. Plain `includes` made
+  // "HP" match HPE — a different company since 2015 — and every
+  // headline mentioning HPC. A short name is a substring of too much
+  // to be used raw.
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(headline)) {
+    return false;
+  }
+
+  // A name of three or four characters is an acronym as often as a
+  // company: "HUD" matched heads-up displays, Hudson RPO, Hyundai and
+  // Siemens, producing 35 contacts with nobody verifiably at the
+  // employer. For those, require corroboration — the domain stem in
+  // the headline, or the name adjacent to "at" or "@" as a headline
+  // states an employer.
+  if (target.length <= 4) {
+    const stem = (companyDomain ?? '').toLowerCase().split('.')[0];
+    const namedAsEmployer = new RegExp(
+      `(at|@)\\s+${escaped}([^a-z0-9]|$)`,
+      'i'
+    ).test(headline);
+    const stemPresent = stem.length > 4 && headline.includes(stem);
+    if (!namedAsEmployer && !stemPresent) return false;
+  }
 
   // "Ex-Cartesia" and "former ... at Cartesia" contain the name but
   // describe someone who has left.
@@ -127,7 +151,7 @@ function usable(candidate, rung, company) {
  */
 export async function findInviteTargets(
   company,
-  { want = 1, minScore = 0.5, onProgress } = {}
+  { want = 1, minScore = 0.5, companyDomain = null, onProgress } = {}
 ) {
   // Skip the walk entirely while the search allowance is spent: every
   // rung would return nothing, which is indistinguishable from a company
@@ -187,7 +211,7 @@ export async function findInviteTargets(
         if (targets.length >= want) break;
         if (seen.has(c.linkedinUrl)) continue;
         if (c.score < minScore) continue;
-        if (!usable(c, rung, company)) continue;
+        if (!usable(c, rung, company, companyDomain)) continue;
 
         seen.add(c.linkedinUrl);
         targets.push({ ...c, rung: rung.rung, rungLabel: rung.label, tier: rung.tier });
@@ -225,7 +249,7 @@ export async function findInviteTargets(
  * everyone on the ladder above peers is worth an email, since an
  * address costs nothing to try beyond the send itself.
  */
-export async function findEmailTargets(company, { want = 8, onProgress } = {}) {
+export async function findEmailTargets(company, { want = 8, companyDomain = null, onProgress } = {}) {
   const out = [];
   const seen = new Set();
 
@@ -244,7 +268,7 @@ export async function findEmailTargets(company, { want = 8, onProgress } = {}) {
       for (const c of batch) {
         if (out.length >= want) break;
         if (seen.has(c.linkedinUrl)) continue;
-        if (!usable({ ...c, providerId: c.providerId ?? 'n/a' }, rung, company)) continue;
+        if (!usable({ ...c, providerId: c.providerId ?? 'n/a' }, rung, company, companyDomain)) continue;
         seen.add(c.linkedinUrl);
         out.push({ ...c, rung: rung.rung, tier: rung.tier });
       }
