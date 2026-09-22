@@ -185,7 +185,19 @@ fi
 
 # Keep beating while the pass runs, so a long run is not mistaken for a
 # crashed one. The heartbeat is what staleness is judged on.
-( while true; do sleep 60; node "$LOCK_CLI" heartbeat "$$" >/dev/null 2>&1 || true; done ) &
+#
+# The loop checks that its parent is still alive rather than looping
+# unconditionally. A `while true` subshell outlives a parent that dies
+# without running its trap — SIGKILL, a crash, a killed terminal — and
+# then keeps the lock fresh forever. That happened: a pass died at 07:06
+# and its heartbeat kept beating until 15:14, so `stale` stayed false and
+# nothing could run for eight hours. The ten-minute staleness window
+# never applied because something was still beating on its behalf.
+PARENT_PID=$$
+( while kill -0 "$PARENT_PID" 2>/dev/null; do
+    sleep 60
+    node "$LOCK_CLI" heartbeat "$PARENT_PID" >/dev/null 2>&1 || true
+  done ) &
 HEARTBEAT_PID=$!
 
 cleanup() {
