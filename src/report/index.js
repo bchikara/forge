@@ -69,6 +69,22 @@ export function gather({ day = today() } = {}) {
     )
     .all(since);
 
+  // Every invitation sent, with its profile link. The operator asked
+  // for these because an invitation is the start of a conversation they
+  // may want to continue by hand — and unlike an email, there is no
+  // sent-items folder to look it up in.
+  const invitesSent = d
+    .prepare(
+      `SELECT k.full_name, k.title, k.linkedin_url, k.rung, k.tier,
+              co.name AS company, i.status, i.sent_at, i.note
+         FROM invites i
+         JOIN contacts k  ON k.id = i.contact_id
+         JOIN companies co ON co.id = i.company_id
+        WHERE i.is_dry_run = 0 AND i.sent_at >= ?
+        ORDER BY co.name, k.full_name`
+    )
+    .all(since);
+
   const bounce = recentBounceRate();
   const accept = acceptanceRate();
   const iq = inviteQuotaUsed();
@@ -80,6 +96,7 @@ export function gather({ day = today() } = {}) {
     emails,
     invites,
     rungs,
+    invitesSent,
     queue: queueStats(),
     dead: deadLetter({ limit: 15 }),
     health: {
@@ -235,6 +252,20 @@ export function renderText(s) {
   L.push('QUEUE');
   L.push(`  ${JSON.stringify(s.queue.byState)}  due now ${s.queue.dueNow}`);
 
+  if (s.invitesSent?.length) {
+    L.push('', 'LINKEDIN INVITATIONS SENT');
+    let lastCompany = null;
+    for (const inv of s.invitesSent) {
+      if (inv.company !== lastCompany) {
+        L.push('', `  ${inv.company}`);
+        lastCompany = inv.company;
+      }
+      L.push(`    ${inv.full_name ?? '(name unknown)'}${inv.status === 'accepted' ? '  [accepted]' : ''}`);
+      if (inv.title) L.push(`      ${inv.title.slice(0, 80)}`);
+      L.push(`      ${inv.linkedin_url ?? '(no profile url)'}`);
+    }
+  }
+
   return L.join('\n');
 }
 
@@ -326,6 +357,48 @@ export function renderHtml(s) {
     <tr><td style="padding:7px 0;">Invite acceptance</td>
       <td style="padding:7px 0;text-align:right;">${pct(s.health.acceptanceRate)} <span style="color:#777;">(pauses below ${pct(s.health.acceptanceFloor)})</span></td></tr>
   </table>
+
+  ${
+    s.invitesSent?.length
+      ? `<h3 style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#777;margin:28px 0 10px;">
+      LinkedIn invitations sent (${s.invitesSent.length})
+    </h3>
+    <div style="font-size:13px;">
+      ${(() => {
+        // Grouped by company, because that is how the day's work was
+        // organised and how it will be followed up.
+        const byCompany = new Map();
+        for (const inv of s.invitesSent) {
+          if (!byCompany.has(inv.company)) byCompany.set(inv.company, []);
+          byCompany.get(inv.company).push(inv);
+        }
+        return [...byCompany.entries()]
+          .map(
+            ([company, list]) => `<div style="margin:0 0 14px;padding:10px 14px;border-left:3px solid #FF6600;background:#fafafa;">
+            <div style="font-weight:600;margin-bottom:6px;">${esc(company)}</div>
+            ${list
+              .map(
+                (inv) => `<div style="margin:6px 0 10px;">
+                <div>
+                  ${
+                    inv.linkedin_url
+                      ? `<a href="${esc(inv.linkedin_url)}" target="_blank">${esc(inv.full_name ?? 'profile')}</a>`
+                      : esc(inv.full_name ?? '(name unknown)')
+                  }
+                  ${inv.status === 'accepted' ? '<span style="color:#2e7d32;font-size:11px;"> accepted</span>' : ''}
+                  ${inv.rung ? `<span style="color:#999;font-size:11px;"> · ${esc(inv.rung)}</span>` : ''}
+                </div>
+                ${inv.title ? `<div style="color:#666;font-size:12px;">${esc(inv.title.slice(0, 90))}</div>` : ''}
+              </div>`
+              )
+              .join('\n')}
+          </div>`
+          )
+          .join('\n');
+      })()}
+    </div>`
+      : ''
+  }
 
   <p style="margin-top:28px;font-size:12px;color:#999;border-top:1px solid #eee;padding-top:12px;">
     Queue: ${esc(JSON.stringify(s.queue.byState))} · ${s.queue.dueNow} due now
