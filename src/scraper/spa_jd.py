@@ -106,6 +106,63 @@ def clean(text: str) -> str:
     return text.strip()
 
 
+# A form's field labels read as plausible prose to a length check but
+# describe the application, not the job. Saving one poisons the fit
+# paragraph, which is built from this text — a Patronus AI fetch came
+# back as "First Name*, Last Name*, Email*" and would have produced
+# outreach citing form fields as evidence of a match.
+FORM_MARKERS = [
+    "indicates a required field",
+    "first name*",
+    "last name*",
+    "resume/cv",
+    "attach resume",
+    "upload resume",
+    "drop files here",
+]
+
+
+def form_starts_at(text: str) -> int | None:
+    """
+    Where the application form begins, or None if there is no form.
+
+    Position is what distinguishes the two cases, not presence. A
+    Greenhouse posting page appends its form to the bottom of a real
+    description — Fanatics had 5,500 characters of posting before the
+    first field label. A form page starts with those labels: Patronus
+    opened with "indicates a required field" 23 characters in.
+    """
+    low = text.lower()
+    hits = [low.find(m) for m in FORM_MARKERS if m in low]
+    return min(hits) if hits else None
+
+
+# A form appearing this early means the page is the form rather than a
+# posting with one attached.
+FORM_HEAD_FRACTION = 0.25
+
+
+def split_off_form(text: str) -> tuple[str, bool]:
+    """
+    Return the posting with any trailing form removed, and whether the
+    page was a form rather than a posting.
+
+    Trimming matters as much as rejecting: leaving "First Name*, Email*,
+    Attach Resume" on the end of a description feeds those labels to the
+    fit matcher as if they were requirements.
+    """
+    start = form_starts_at(text)
+    if start is None:
+        return text, False
+
+    # A form at the very start, ormost of a short page, means there is
+    # no posting here.
+    if start < max(400, len(text) * FORM_HEAD_FRACTION):
+        return text, True
+
+    return text[:start].rstrip(), False
+
+
 def fetch(url: str, timeout_ms: int = 45_000, headless: bool = True) -> Result:
     ats = detect_ats(url)
     candidates = SELECTORS.get(ats, []) + SELECTORS["generic"]
@@ -154,10 +211,11 @@ def fetch(url: str, timeout_ms: int = 45_000, headless: bool = True) -> Result:
                     # A container can exist while holding only a
                     # heading. Requiring real length is what separates
                     # "found the description" from "found the shell".
-                    if len(text) >= 400:
+                    posting, is_form = split_off_form(text)
+                    if len(posting) >= 400 and not is_form:
                         return Result(
                             status="success", url=url, ats=ats,
-                            jobDescription=text, chars=len(text), selector=sel,
+                            jobDescription=posting, chars=len(posting), selector=sel,
                         )
                 except PWTimeout:
                     continue
@@ -169,9 +227,15 @@ def fetch(url: str, timeout_ms: int = 45_000, headless: bool = True) -> Result:
                     junk, "els => els.forEach(e => e.remove())"
                 )
             text = clean(page.inner_text("body"))
-            if len(text) >= 400:
+            posting, is_form = split_off_form(text)
+            if len(posting) >= 400 and not is_form:
                 return Result(status="success", url=url, ats=ats,
-                              jobDescription=text, chars=len(text), selector="body-fallback")
+                              jobDescription=posting, chars=len(posting), selector="body-fallback")
+
+            if is_form:
+                return Result(status="failed", url=url, ats=ats,
+                              error="page is an application form, not a posting — "
+                                    "saving it would put form labels in the fit paragraph")
 
             return Result(status="failed", url=url, ats=ats,
                           error=f"no container held more than 400 characters (body had {len(text)})")
