@@ -119,12 +119,26 @@ function usable(candidate, rung, company, companyDomain = null) {
   // states an employer.
   if (target.length <= 4) {
     const stem = (companyDomain ?? '').toLowerCase().split('.')[0];
-    const namedAsEmployer = new RegExp(
-      `(at|@)\\s+${escaped}([^a-z0-9]|$)`,
+
+    // The employer must be named exactly, not merely contain the name.
+    // An "at|@ <name>" rule was not enough: "@ IT MONK Inc" satisfies
+    // it, because MONK sits on a word boundary inside a different
+    // company's name. So the match has to end the employer phrase — at
+    // a separator, a corporate suffix, or the end of the string — and
+    // must not be preceded by another word that makes it part of a
+    // longer name.
+    const employerNamed = new RegExp(
+      `(^|[|•·,]\\s*|(?:^|\\s)(?:at|@)\\s+)${escaped}` +
+        `(\\s+(?:inc|llc|ltd|corp|co|technologies|labs|ai)\\b)?` +
+        `\\s*($|[|•·,.])`,
       'i'
     ).test(headline);
+
+    // The domain stem is stronger evidence than any phrasing, when the
+    // stem is distinctive enough to be worth matching.
     const stemPresent = stem.length > 4 && headline.includes(stem);
-    if (!namedAsEmployer && !stemPresent) return false;
+
+    if (!employerNamed && !stemPresent) return false;
   }
 
   // "Ex-Cartesia" and "former ... at Cartesia" contain the name but
