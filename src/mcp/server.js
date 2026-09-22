@@ -61,6 +61,7 @@ import {
 import { findInviteTargets } from '../adapters/ladder.js';
 import { stats as queueStats, deadLetter, revive, reclaimExpired } from '../queue/index.js';
 import { cooldownStatus, clearCooldown } from '../adapters/cooldown.js';
+import { searchStreak } from '../adapters/unipile.js';
 import { status as lockStatus } from '../lock/index.js';
 import { sendDailyReport, sendFailureAlert, gather, attentionItems } from '../report/index.js';
 
@@ -407,6 +408,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           providers: {
             jobright: cooldownStatus('jobright'),
             unipile: cooldownStatus('unipile'),
+            // LinkedIn search reports its own exhaustion as empty
+            // results rather than an error, so the streak of empty
+            // searches is the only signal — worth showing before a
+            // caller concludes a company simply has nobody.
+            unipileSearch: {
+              ...cooldownStatus('unipile-search'),
+              ...searchStreak(),
+            },
           },
           email: {
             sentToday: quotaUsedToday(),

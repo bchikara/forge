@@ -20,7 +20,14 @@
  * one posting, so they sit lower here.
  */
 
-import { searchPeople, UnipileAuthError, AccountRestrictedError } from './unipile.js';
+import {
+  searchPeople,
+  UnipileAuthError,
+  AccountRestrictedError,
+  SearchExhaustedError,
+} from './unipile.js';
+import { startCooldown, cooldownRemaining, cooldownStatus } from './cooldown.js';
+import { config } from '../config.js';
 
 /**
  * Rungs, best first.
@@ -122,6 +129,16 @@ export async function findInviteTargets(
   company,
   { want = 1, minScore = 0.5, onProgress } = {}
 ) {
+  // Skip the walk entirely while the search allowance is spent: every
+  // rung would return nothing, which is indistinguishable from a company
+  // that genuinely has nobody and would poison the result.
+  const cooling = cooldownRemaining('unipile-search');
+  if (cooling > 0) {
+    const err = new SearchExhaustedError(0);
+    err.cooldown = cooldownStatus('unipile-search');
+    throw err;
+  }
+
   const targets = [];
   const rungsTried = [];
   const seen = new Set();
@@ -148,6 +165,20 @@ export async function findInviteTargets(
         // subsequent query the same way — surface it rather than
         // walking the whole ladder into the same error.
         if (err instanceof UnipileAuthError || err instanceof AccountRestrictedError) throw err;
+
+        // A run of empty searches means the allowance is spent, which
+        // every remaining rung and company would also hit. Record when
+        // to come back so later callers skip the request rather than
+        // rediscovering it one company at a time.
+        if (err instanceof SearchExhaustedError) {
+          startCooldown(
+            'unipile-search',
+            config.unipile.searchCooldownMs,
+            `${err.streak} consecutive empty searches — allowance spent`
+          );
+          throw err;
+        }
+
         onProgress?.({ company, rung: rung.rung, query: q, error: err.message });
         continue;
       }

@@ -117,6 +117,52 @@ function baseUrl() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Consecutive searches that returned nothing.
+ *
+ * When LinkedIn's search allowance runs out, Unipile does not report an
+ * error: it returns an empty result set, exactly as it would for a
+ * company with no matching people. A single zero is therefore
+ * meaningless, but a run of them is not — a real search that scanned
+ * two dozen candidates a minute ago does not suddenly find nobody
+ * anywhere.
+ *
+ * Last night a run only caught this because an agent probed a company
+ * it knew had findable staff and still got zero. That judgement belongs
+ * in the code rather than in whoever happens to be watching.
+ */
+let consecutiveEmpty = 0;
+
+/**
+ * How many empty searches in a row before the allowance is assumed
+ * spent. Three is deliberate: one or two companies genuinely having
+ * nobody at a given rung is ordinary, three in a row is not.
+ */
+const EMPTY_STREAK_LIMIT = 3;
+
+export class SearchExhaustedError extends Error {
+  constructor(streak) {
+    super(
+      `LinkedIn search returned nothing ${streak} times in a row. The search ` +
+        `allowance is almost certainly spent — Unipile reports this as an empty ` +
+        `result rather than an error, so it is indistinguishable from a company ` +
+        `with no matching people until it repeats. Invitations to contacts ` +
+        `already found still work; new discovery does not.`
+    );
+    this.name = 'SearchExhaustedError';
+    this.streak = streak;
+  }
+}
+
+/** Reset after any search that actually returned people. */
+export function resetSearchStreak() {
+  consecutiveEmpty = 0;
+}
+
+export function searchStreak() {
+  return { consecutiveEmpty, limit: EMPTY_STREAK_LIMIT };
+}
+
 async function call(path, { method = 'GET', body, signal } = {}) {
   if (!config.unipile.apiKey) {
     throw new Error('UNIPILE_API_KEY is not set — add it to .env');
@@ -254,7 +300,20 @@ export async function searchPeople(
     }
 
     const items = data.items ?? [];
-    if (items.length === 0) break;
+    if (items.length === 0) {
+      // Only the first page of a search counts toward the streak: a
+      // later page coming back empty just means the result set ended.
+      if (page === 0 && out.length === 0) {
+        consecutiveEmpty += 1;
+        if (consecutiveEmpty >= EMPTY_STREAK_LIMIT) {
+          throw new SearchExhaustedError(consecutiveEmpty);
+        }
+      }
+      break;
+    }
+
+    // A search that returned people proves the allowance is intact.
+    consecutiveEmpty = 0;
 
     for (const item of items) {
       const url = normalizeProfileUrl(item.public_profile_url ?? item.profile_url);

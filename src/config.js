@@ -196,6 +196,13 @@ export const config = {
     apiKey: process.env.UNIPILE_API_KEY ?? '',
     accountId: process.env.UNIPILE_ACCOUNT_ID ?? '',
 
+    // LinkedIn's search allowance, surfaced through Unipile as empty
+    // results rather than an error. The reset window is not documented
+    // and appears to be daily rather than hourly, so this is longer
+    // than jobright's — better to under-use the allowance than to keep
+    // probing a closed door and have the account noticed for it.
+    searchCooldownMs: int(process.env.UNIPILE_SEARCH_COOLDOWN_MS, 6 * 60 * 60 * 1000),
+
     // -------------------------------------------------------------
     // Invitation quotas
     // -------------------------------------------------------------
